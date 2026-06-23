@@ -1,18 +1,111 @@
 #pragma once
 
 #include <algorithm>
+#include <flat_map>
+#include <functional>
 #include <iterator>
+#include <map>
+#include <numeric>
 #include <random>
-#include <stdexcept>
-#include <string_view>
+#include <vector>
 
 #include "book_database.hpp"
-
-#include <print>
+#include "heterogeneous_lookup.hpp"
 
 namespace bookdb {
 
+// Histogram without flat containers — uses std::map (for comparison)
 template <BookContainerLike T, typename Comparator = TransparentStringLess>
-auto buildAuthorHistogramFlat(const BookDatabase<T> &cont, Comparator comp = {}) {}
+auto buildAuthorHistogram(const BookDatabase<T> &cont, Comparator comp = {}) {
+    std::map<std::string, int, Comparator> histogram(comp);
+    for (const auto &book : cont) {
+        ++histogram[std::string(book.author)];
+    }
+    return histogram;
+}
+
+// Histogram: author -> book count, using std::flat_map with transparent comparator
+template <BookContainerLike T, typename Comparator = TransparentStringLess>
+auto buildAuthorHistogramFlat(const BookDatabase<T> &cont, Comparator comp = {}) {
+    std::flat_map<std::string, int, Comparator> histogram(comp);
+    for (const auto &book : cont) {
+        ++histogram[std::string(book.author)];
+    }
+    return histogram;
+}
+
+// Average rating per genre using std::flat_map
+template <BookIterator It, BookSentinel<It> Sent>
+auto calculateGenreRatings(It first, Sent last) {
+    std::flat_map<Genre, std::pair<double, int>> accumulator;
+    for (auto it = first; it != last; ++it) {
+        auto &[sum, count] = accumulator[it->genre];
+        sum += it->rating;
+        ++count;
+    }
+    std::flat_map<Genre, double> result;
+    for (const auto &[genre, sc] : accumulator) {
+        result[genre] = sc.first / sc.second;
+    }
+    return result;
+}
+
+// Average rating of all books (uses std::transform_reduce from STL)
+template <BookContainerLike T>
+double calculateAverageRating(const BookDatabase<T> &books) {
+    if (books.empty()) return 0.0;
+    double sum = std::transform_reduce(
+        books.begin(), books.end(), 0.0,
+        std::plus<>{},
+        [](const Book &b) { return b.rating; });
+    return sum / static_cast<double>(books.size());
+}
+
+// Check if all books satisfy a predicate (wraps std::all_of from STL)
+template <BookContainerLike T, typename Pred>
+bool allBooksMatch(const BookDatabase<T> &books, Pred pred) {
+    return std::all_of(books.begin(), books.end(), pred);
+}
+
+// Extract ratings into a vector (uses std::transform from STL)
+template <BookContainerLike T>
+std::vector<double> extractRatings(const BookDatabase<T> &books) {
+    std::vector<double> ratings;
+    ratings.reserve(books.size());
+    std::transform(books.begin(), books.end(), std::back_inserter(ratings),
+                   [](const Book &b) { return b.rating; });
+    return ratings;
+}
+
+// Random sample of `num` books
+template <BookContainerLike T>
+auto sampleRandomBooks(const BookDatabase<T> &cont, size_t num) {
+    std::vector<std::reference_wrapper<const Book>> pool;
+    pool.reserve(cont.size());
+    for (const auto &b : cont) {
+        pool.emplace_back(std::cref(b));
+    }
+    if (num >= pool.size()) return pool;
+
+    std::vector<std::reference_wrapper<const Book>> result;
+    result.reserve(num);
+    std::mt19937 rng(std::random_device{}());
+    std::sample(pool.begin(), pool.end(), std::back_inserter(result), num, rng);
+    return result;
+}
+
+// Top N books by comparator (allowed to modify container via sort)
+template <BookContainerLike T, typename Comparator>
+auto getTopNBy(BookDatabase<T> &cont, size_t n, Comparator comp) {
+    std::sort(cont.begin(), cont.end(), comp);
+    std::vector<std::reference_wrapper<const Book>> result;
+    size_t count = std::min(n, cont.size());
+    auto it = cont.end();
+    for (size_t i = 0; i < count; ++i) {
+        --it;
+        result.emplace_back(std::cref(*it));
+    }
+    return result;
+}
 
 }  // namespace bookdb
